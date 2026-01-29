@@ -5,7 +5,7 @@ A pre-configured agent with calculator tools.
 """
 
 from ..agent import Agent
-from ..tools.calculator import CALCULATOR_TOOLS
+from ..tools.calculator import calculator_tool
 
 
 class CalculatorAgent(Agent):
@@ -20,7 +20,7 @@ class CalculatorAgent(Agent):
         """
         super().__init__(
             model=model,
-            tools=CALCULATOR_TOOLS,
+            tools=calculator_tool,
             system_prompt="You are a helpful calculator assistant. "
             "Use the available tools to perform calculations.",
         )

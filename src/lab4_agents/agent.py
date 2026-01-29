@@ -11,6 +11,7 @@ from typing import Any
 from dotenv import load_dotenv
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageToolCall
+from pydantic import BaseModel, Field
 
 from .tool import Tool
 
@@ -21,6 +22,14 @@ load_dotenv()
 GROQ_API_ENDPOINT = os.getenv("GROQ_API_ENDPOINT")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile")
+
+
+class AgentToolParams(BaseModel):
+    """Parameters for calling an agent as a tool."""
+
+    user_input: str = Field(
+        description="The input/question to send to the agent. This will be processed by the agent using its tools and capabilities."
+    )
 
 
 class Agent:
@@ -57,6 +66,59 @@ class Agent:
         # Add system prompt if provided
         if system_prompt:
             self.messages.append({"role": "system", "content": system_prompt})
+
+    @staticmethod
+    def as_tool(
+        agent: "Agent", name: str | None = None, description: str | None = None
+    ) -> Tool:
+        """
+        Create a Tool wrapper for an Agent instance.
+
+        This allows one agent to use another agent as a tool. When the tool is called,
+        it will run the agent with the provided user input and return the agent's response.
+
+        Args:
+            agent: The Agent instance to wrap as a tool
+            name: Optional custom name for the tool (defaults to agent's class name)
+            description: Optional custom description (defaults to a generic description)
+
+        Returns:
+            A Tool instance that wraps the agent
+
+        Example:
+            >>> calculator_agent = CalculatorAgent()
+            >>> main_agent = Agent(tools=[Agent.as_tool(calculator_agent, name="calculator_agent")])
+            >>> main_agent.run("Use the calculator agent to add 5 and 3")
+        """
+        tool_name = name or f"{agent.__class__.__name__.lower()}_agent"
+        tool_description = (
+            description
+            or f"Delegate tasks to a specialized {agent.__class__.__name__} agent. "
+            f"Provide the user input/question, and the agent will process it using its capabilities and tools."
+        )
+
+        def agent_tool_func(args: dict[str, Any]) -> dict[str, Any]:
+            """Execute the agent with the provided user input."""
+            try:
+                params = AgentToolParams(**args)
+                # Create a fresh instance to avoid state pollution
+                # Preserve the agent's class and configuration
+                fresh_agent = agent.__class__(
+                    model=agent.model,
+                    tools=list(agent.tools.values()),
+                    system_prompt=agent.system_prompt,
+                )
+                result = fresh_agent.run(params.user_input)
+                return {"response": result}
+            except Exception as e:
+                return {"error": f"Error running agent: {str(e)}"}
+
+        return Tool(
+            name=tool_name,
+            description=tool_description,
+            parameters=AgentToolParams,
+            func=agent_tool_func,
+        )
 
     def _get_openai_tools(self) -> list[dict[str, Any]] | None:
         """Get tools in OpenAI format."""
