@@ -4,6 +4,7 @@ Tool definition for AI agents.
 A Tool represents a function that an AI agent can invoke to complete tasks.
 """
 
+import inspect
 from dataclasses import dataclass
 from typing import Any, Callable, Type
 
@@ -38,6 +39,10 @@ class Tool:
             },
         }
 
-    def execute(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def execute(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Execute the tool with the given arguments."""
-        return self.func(arguments)
+        result = self.func(arguments)
+        # Support both sync and async tool functions
+        if inspect.isawaitable(result):
+            return await result
+        return result
