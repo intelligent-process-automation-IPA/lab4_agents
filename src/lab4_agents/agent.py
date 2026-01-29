@@ -12,6 +12,12 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageToolCall
 from pydantic import BaseModel, Field
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+)
 
 from .tool import Tool
 
@@ -60,10 +66,21 @@ class Agent:
         self.client = OpenAI(api_key=GROQ_API_KEY, base_url=GROQ_API_ENDPOINT)
         self.model = model or GROQ_MODEL
         self.tools = {tool.name: tool for tool in (tools or [])}
+
+        # Set default system prompt if none provided (best practice)
+        if system_prompt is None:
+            system_prompt = (
+                "You are a helpful AI assistant with access to various tools. "
+                "Use the available tools when necessary to answer user questions accurately. "
+                "After receiving tool results, provide a clear final answer to the user. "
+                "Do NOT call the same tool repeatedly with identical arguments. "
+                "Think step by step and explain your reasoning."
+            )
+
         self.system_prompt = system_prompt
         self.messages: list[dict[str, Any]] = []
 
-        # Add system prompt if provided
+        # Add system prompt to message history
         if system_prompt:
             self.messages.append({"role": "system", "content": system_prompt})
 
@@ -126,8 +143,21 @@ class Agent:
             return None
         return [tool.to_openai_format() for tool in self.tools.values()]
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((Exception,))
+    )
     def _call_api(self) -> ChatCompletionMessage:
-        """Make a single API call to OpenAI."""
+        """
+        Make a single API call to OpenAI with retry logic.
+
+        Implements exponential backoff with the following behavior:
+        - Retries up to 3 times on any exception
+        - Initial wait: 2 seconds
+        - Exponential backoff: wait increases exponentially
+        - Maximum wait: 10 seconds between retries
+        """
         response = self.client.chat.completions.create(
             model=self.model,
             messages=self.messages,
@@ -163,6 +193,7 @@ class Agent:
         if message.content:
             assistant_message["content"] = message.content
         if message.tool_calls:
+            # Include tool_calls in message history for proper context
             assistant_message["tool_calls"] = [
                 {
                     "id": tc.id,
@@ -189,7 +220,7 @@ class Agent:
                 }
             )
 
-    def run(self, user_input: str) -> str:
+    def run(self, user_input: str, max_iterations: int = 10) -> str:
         """
         Run the agent with user input.
 
@@ -201,16 +232,24 @@ class Agent:
 
         Args:
             user_input: The user's message/question
+            max_iterations: Maximum number of iterations to prevent infinite loops.
+                           Defaults to 10. Set higher for complex multi-step tasks.
 
         Returns:
             The agent's final text response
+
+        Raises:
+            RuntimeError: If max_iterations is reached without a final response
         """
         # Add user message
         self.messages.append({"role": "user", "content": user_input})
 
-        # Agent loop
-        while True:
-            # Call the API
+        # Agent loop with iteration limit to prevent infinite loops
+        iteration = 0
+        while iteration < max_iterations:
+            iteration += 1
+
+            # Call the API (with retry logic via @retry decorator)
             message = self._call_api()
 
             # Check if the model wants to use tools
@@ -224,6 +263,12 @@ class Agent:
             # Add assistant message to history
             self.messages.append({"role": "assistant", "content": message.content})
             return message.content
+
+        # Max iterations reached - prevent infinite loops
+        raise RuntimeError(
+            f"Maximum iterations ({max_iterations}) reached. "
+            "The agent may be stuck in a loop. Check your system prompt and tool implementations."
+        )
 
     def reset(self) -> None:
         """Clear conversation history (keeps system prompt)."""
