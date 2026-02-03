@@ -10,6 +10,7 @@ import os
 from typing import Any
 
 from dotenv import load_dotenv
+from langfuse import get_client, observe
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageToolCall
 from pydantic import BaseModel, Field
@@ -144,6 +145,7 @@ class Agent:
             return None
         return [tool.to_openai_format() for tool in self.tools.values()]
 
+    @observe(as_type="generation")
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -159,13 +161,28 @@ class Agent:
         - Exponential backoff: wait increases exponentially
         - Maximum wait: 10 seconds between retries
         """
+        get_client().update_current_span(
+            name="llm_call",
+            input=self.messages,
+            metadata={"model": self.model, "tools": self._get_openai_tools()},
+        )
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=self.messages,
             tools=self._get_openai_tools(),
         )
-        return response.choices[0].message
+        message = response.choices[0].message
+        get_client().update_current_generation(
+            output=message.content,
+            usage={
+                "input": response.usage.prompt_tokens if response.usage else None,
+                "output": response.usage.completion_tokens if response.usage else None,
+            },
+            model=self.model,
+        )
+        return message
 
+    @observe(as_type="span")
     async def _execute_tool_call(
         self, tool_call: ChatCompletionMessageToolCall
     ) -> dict[str, Any]:
@@ -173,16 +190,26 @@ class Agent:
         tool_name = tool_call.function.name
         arguments = json.loads(tool_call.function.arguments)
 
+        get_client().update_current_span(
+            name=f"tool:{tool_name}",
+            input=arguments,
+        )
+
         # Find and execute the tool
         tool = self.tools.get(tool_name)
         if tool is None:
-            return {"error": f"Tool '{tool_name}' not found"}
+            error_result = {"error": f"Tool '{tool_name}' not found"}
+            get_client().update_current_span(output=error_result, level="ERROR")
+            return error_result
 
         try:
             result = await tool.execute(arguments)
+            get_client().update_current_span(output=result)
             return result
         except Exception as e:
-            return {"error": str(e)}
+            error_result = {"error": str(e)}
+            get_client().update_current_span(output=error_result, level="ERROR")
+            return error_result
 
     async def _process_tool_calls(self, message: ChatCompletionMessage) -> None:
         """Process all tool calls in a message."""
@@ -223,6 +250,7 @@ class Agent:
                 }
             )
 
+    @observe()
     async def run(self, user_input: str, max_iterations: int = 10) -> str:
         """
         Run the agent with user input.
@@ -244,6 +272,11 @@ class Agent:
         Raises:
             RuntimeError: If max_iterations is reached without a final response
         """
+        get_client().update_current_trace(
+            name=f"agent_run:{self.__class__.__name__}",
+            input=user_input,
+            metadata={"model": self.model, "max_iterations": max_iterations},
+        )
         # Add user message
         self.messages.append({"role": "user", "content": user_input})
 
@@ -265,13 +298,16 @@ class Agent:
             # No tool calls - we have a final response
             # Add assistant message to history
             self.messages.append({"role": "assistant", "content": message.content})
+            get_client().update_current_trace(output=message.content)
             return message.content
 
         # Max iterations reached - prevent infinite loops
-        raise RuntimeError(
+        error_msg = (
             f"Maximum iterations ({max_iterations}) reached. "
             "The agent may be stuck in a loop. Check your system prompt and tool implementations."
         )
+        get_client().update_current_trace(output=error_msg, level="ERROR")
+        raise RuntimeError(error_msg)
 
     def reset(self) -> None:
         """Clear conversation history (keeps system prompt)."""

@@ -65,7 +65,7 @@ class PlannerAgent(Agent):
 
         self.max_replan_iterations = max_replan_iterations
 
-    def plan(self, user_query: str) -> list[str]:
+    async def plan(self, user_query: str) -> list[str]:
         """
         Generate a multi-step plan for the given query.
 
@@ -82,14 +82,14 @@ class PlannerAgent(Agent):
             f"Each step should be a single, actionable instruction. "
             f"Be specific and clear about what needs to be done in each step."
         )
-    
+
         # Use a temporary agent instance to avoid polluting main conversation
         temp_agent = Agent(
             model=self.model,
             tools=list(self.tools.values()),
             system_prompt=self.system_prompt,
         )
-        response = temp_agent.run(planning_prompt)
+        response = await temp_agent.run(planning_prompt)
 
         # Parse the response to extract plan steps
         steps = self._parse_plan(response)
@@ -142,7 +142,7 @@ class PlannerAgent(Agent):
 
         return steps
 
-    def execute_step(
+    async def execute_step(
         self, step: str, context: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """
@@ -172,12 +172,12 @@ class PlannerAgent(Agent):
         try:
             # Reset executor to avoid state pollution between steps
             self.executor.reset()
-            result = self.executor.run(execution_prompt)
+            result = await self.executor.run(execution_prompt)
             return {"status": "success", "output": result}
         except Exception as e:
             return {"status": "error", "output": None, "error": str(e)}
 
-    def replan(
+    async def replan(
         self,
         user_query: str,
         executed_steps: list[dict[str, Any]],
@@ -225,7 +225,7 @@ class PlannerAgent(Agent):
             tools=list(self.tools.values()),
             system_prompt=self.system_prompt,
         )
-        response = temp_agent.run(replanning_prompt)
+        response = await temp_agent.run(replanning_prompt)
 
         # Check if task is complete
         if (
@@ -243,18 +243,19 @@ class PlannerAgent(Agent):
         # Return None to indicate we should finish (safety fallback)
         return None
 
-    def run(self, user_query: str) -> str:
+    async def run(self, user_query: str, max_iterations: int = 10) -> str:
         """
         Main entry point: Plan, execute, and re-plan as needed.
 
         Args:
             user_query: The user's task or question
+            max_iterations: Unused, kept for API compatibility with Agent.run
 
         Returns:
             Final response to the user
         """
         # Generate initial plan
-        plan = self.plan(user_query)
+        plan = await self.plan(user_query)
         if not plan:
             return "Error: Could not generate a plan for the task."
 
@@ -267,7 +268,7 @@ class PlannerAgent(Agent):
             context: dict[str, Any] = {}
 
             for step in plan:
-                step_result = self.execute_step(step, context)
+                step_result = await self.execute_step(step, context)
                 executed_steps.append(step_result)
 
                 # Update context with step result
@@ -281,7 +282,7 @@ class PlannerAgent(Agent):
 
             # Check if we need to re-plan
             if replan_count < self.max_replan_iterations:
-                new_plan = self.replan(user_query, executed_steps, plan)
+                new_plan = await self.replan(user_query, executed_steps, plan)
                 if new_plan is None:
                     # Task is complete, generate final response
                     break
@@ -302,5 +303,5 @@ class PlannerAgent(Agent):
 
         # Use executor to generate final response (it has access to tools if needed)
         self.executor.reset()
-        final_response = self.executor.run(final_prompt)
+        final_response = await self.executor.run(final_prompt)
         return final_response
