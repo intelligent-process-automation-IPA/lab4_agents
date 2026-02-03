@@ -4,14 +4,13 @@ Minimal AI Agents Framework
 A didactic implementation showing how AI agents work with tools.
 """
 
-import asyncio
 import json
 import os
 from typing import Any
 
 from dotenv import load_dotenv
 from langfuse import get_client, observe
-from openai import AsyncOpenAI
+from openai import OpenAI
 from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageToolCall
 from pydantic import BaseModel, Field
 from tenacity import (
@@ -65,7 +64,7 @@ class Agent:
             tools: List of tools the agent can use
             system_prompt: Optional system message to set agent behavior
         """
-        self.client = AsyncOpenAI(api_key=GROQ_API_KEY, base_url=GROQ_API_ENDPOINT)
+        self.client = OpenAI(api_key=GROQ_API_KEY, base_url=GROQ_API_ENDPOINT)
         self.model = model or GROQ_MODEL
         self.tools = {tool.name: tool for tool in (tools or [])}
 
@@ -116,7 +115,7 @@ class Agent:
             f"Provide the user input/question, and the agent will process it using its capabilities and tools."
         )
 
-        async def agent_tool_func(args: dict[str, Any]) -> dict[str, Any]:
+        def agent_tool_func(args: dict[str, Any]) -> dict[str, Any]:
             """Execute the agent with the provided user input."""
             try:
                 params = AgentToolParams(**args)
@@ -127,7 +126,7 @@ class Agent:
                     tools=list(agent.tools.values()),
                     system_prompt=agent.system_prompt,
                 )
-                result = await fresh_agent.run(params.user_input)
+                result = fresh_agent.run(params.user_input)
                 return {"response": result}
             except Exception as e:
                 return {"error": f"Error running agent: {str(e)}"}
@@ -149,9 +148,9 @@ class Agent:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((Exception,))
+        retry=retry_if_exception_type((Exception,)),
     )
-    async def _call_api(self) -> ChatCompletionMessage:
+    def _call_api(self) -> ChatCompletionMessage:
         """
         Make a single API call to OpenAI with retry logic.
 
@@ -166,7 +165,7 @@ class Agent:
             input=self.messages,
             metadata={"model": self.model, "tools": self._get_openai_tools()},
         )
-        response = await self.client.chat.completions.create(
+        response = self.client.chat.completions.create(
             model=self.model,
             messages=self.messages,
             tools=self._get_openai_tools(),
@@ -174,16 +173,12 @@ class Agent:
         message = response.choices[0].message
         get_client().update_current_generation(
             output=message.content,
-            usage={
-                "input": response.usage.prompt_tokens if response.usage else None,
-                "output": response.usage.completion_tokens if response.usage else None,
-            },
             model=self.model,
         )
         return message
 
     @observe(as_type="span")
-    async def _execute_tool_call(
+    def _execute_tool_call(
         self, tool_call: ChatCompletionMessageToolCall
     ) -> dict[str, Any]:
         """Execute a single tool call and return the result."""
@@ -203,7 +198,7 @@ class Agent:
             return error_result
 
         try:
-            result = await tool.execute(arguments)
+            result = tool.execute(arguments)
             get_client().update_current_span(output=result)
             return result
         except Exception as e:
@@ -211,7 +206,7 @@ class Agent:
             get_client().update_current_span(output=error_result, level="ERROR")
             return error_result
 
-    async def _process_tool_calls(self, message: ChatCompletionMessage) -> None:
+    def _process_tool_calls(self, message: ChatCompletionMessage) -> None:
         """Process all tool calls in a message."""
         # First, add the assistant's message with tool calls
         # Only include necessary fields, exclude annotations which API doesn't support
@@ -235,10 +230,10 @@ class Agent:
             ]
         self.messages.append(assistant_message)
 
-        # Execute all tool calls concurrently
-        tool_results = await asyncio.gather(
-            *[self._execute_tool_call(tool_call) for tool_call in message.tool_calls]
-        )
+        # Execute all tool calls sequentially
+        tool_results = [
+            self._execute_tool_call(tool_call) for tool_call in message.tool_calls
+        ]
 
         # Add tool results to messages
         for tool_call, result in zip(message.tool_calls, tool_results):
@@ -251,7 +246,7 @@ class Agent:
             )
 
     @observe()
-    async def run(self, user_input: str, max_iterations: int = 10) -> str:
+    def run(self, user_input: str, max_iterations: int = 10) -> str:
         """
         Run the agent with user input.
 
@@ -286,12 +281,12 @@ class Agent:
             iteration += 1
 
             # Call the API (with retry logic via @retry decorator)
-            message = await self._call_api()
+            message = self._call_api()
 
             # Check if the model wants to use tools
             if message.tool_calls:
                 # Execute tools and add results to messages
-                await self._process_tool_calls(message)
+                self._process_tool_calls(message)
                 # Continue the loop to get the next response
                 continue
 

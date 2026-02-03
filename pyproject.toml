@@ -1,20 +1,20 @@
 [project]
 name = "lab4-agents"
 version = "0.1.0"
-description = "Add your description here"
+description = "A minimal, educational AI agents framework demonstrating tool integration and agentic workflows with async support and Langfuse observability"
 readme = "README.md"
 authors = [
     { name = "FBarrca", email = "FBarrca@users.noreply.github.com" }
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "asyncio>=4.0.0",
+    "fire>=0.7.1",
     "ipykernel>=7.1.0",
     "langfuse>=2.0.0",
-    "litellm>=1.81.3",
     "openai>=2.15.0",
     "pydantic>=2.12.5",
     "python-dotenv>=1.2.1",
+    "rich>=14.3.2",
     "tenacity>=9.1.2",
 ]
 

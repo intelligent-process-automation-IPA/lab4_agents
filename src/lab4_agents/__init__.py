@@ -6,6 +6,8 @@ A didactic implementation showing how AI agents work with tools.
 
 from .agent import Agent
 from .tool import Tool
+from .tui import TUI
+from .tui_planner import PlannerTUI
 
 # Make submodules accessible
 from . import tools
@@ -16,4 +18,6 @@ __all__ = [
     "Tool",
     "tools",
     "subagents",
+    "TUI",
+    "PlannerTUI",
 ]
