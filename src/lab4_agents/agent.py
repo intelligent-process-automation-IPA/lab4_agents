@@ -4,6 +4,7 @@ Minimal AI Agents Framework
 A didactic implementation showing how AI agents work with tools.
 """
 
+import inspect
 import json
 import os
 from typing import Any
@@ -121,11 +122,20 @@ class Agent:
                 params = AgentToolParams(**args)
                 # Create a fresh instance to avoid state pollution
                 # Preserve the agent's class and configuration
-                fresh_agent = agent.__class__(
-                    model=agent.model,
-                    tools=list(agent.tools.values()),
-                    system_prompt=agent.system_prompt,
-                )
+                # Check which parameters the __init__ method accepts
+                init_signature = inspect.signature(agent.__class__.__init__)
+                init_params = init_signature.parameters
+                
+                # Build kwargs based on what the __init__ accepts
+                init_kwargs: dict[str, Any] = {}
+                if "model" in init_params:
+                    init_kwargs["model"] = agent.model
+                if "tools" in init_params:
+                    init_kwargs["tools"] = list(agent.tools.values())
+                if "system_prompt" in init_params:
+                    init_kwargs["system_prompt"] = agent.system_prompt
+                
+                fresh_agent = agent.__class__(**init_kwargs)
                 result = fresh_agent.run(params.user_input)
                 return {"response": result}
             except Exception as e:
